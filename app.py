@@ -1,43 +1,42 @@
-from itertools import count
 from flask import Flask, jsonify, request, redirect, url_for
 import sqlite3
 from hashids import Hashids
 from helper import  url_validator, extract_domain
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime    
+
 
 app = Flask(__name__)
 app.config.from_pyfile('flask_config.cfg')
+db = SQLAlchemy(app)
+from model import Urls
+
+
+@app.before_first_request 
+def create_tables():
+    db.create_all()
 
 #We need to specify a salt for the Hashids library; 
 # this will ensure the hashes are unpredictable since every time the salt changes, the hashes also change.
 hashids = Hashids(min_length=4, salt=app.config['SECRET_KEY'])
-
-
+    
 
 @app.route('/<id>')
 def url_redirect(id):
     """
     This route takes the short hash that has been generated inside index() and decodes the hash into its integer value (the original URLs ID)
     At the end, users will be redirected to the original URL and the return a unique short-form URL .
-    """
-    
-    #connect to DB
-    con = sqlite3.connect('database.db')
-    con.row_factory = sqlite3.Row
-    
+    """    
     #decode hash into integer value
     id_orig = hashids.decode(id) 
     
     if id_orig:
-        original_id = id_orig[0]
-        url_data = con.execute('SELECT url_original, url_short, count_original FROM urls'
-                                ' WHERE id = (?)', (original_id,)
-                                ).fetchone()
-        
-        url_original = url_data['url_original']
-        url_short = url_data['url_short']
-        count_original = url_data['count_original']       
-        con.commit()
-        con.close()
+        original_id = id_orig[0]       
+        url_data = Urls.query.filter_by(id=original_id).first()         
+        url_original = url_data.url_original
+        url_short = url_data.url_short
+        count_original = url_data.count_original       
+        db.session.commit()
         return(redirect(url_original))
     
     else:
@@ -48,12 +47,7 @@ def url_redirect(id):
 def index():
     """
     return the shortened url upon POST requests and store it in DB 
-    """
-    
-    #connect to DB
-    con = sqlite3.connect('database.db')
-    con.row_factory = sqlite3.Row
-    
+    """    
     if request.method == 'POST':
         #Get raw long url         
         content= request.get_json(force=True)
@@ -68,36 +62,34 @@ def index():
         
         if not url:
             return redirect(url_for('index'))
-                
-        check_long_url = con.execute('SELECT * FROM urls WHERE url_original = ?',(url,)).fetchone()
-        check_short_url = con.execute('SELECT * FROM urls WHERE url_short = ?',(url,)).fetchone()
-
-        #if short url found, return long url from db and increment count_original
-        if check_short_url: 
-            counter= check_short_url['count_original'] + 1
-            con.execute("UPDATE urls SET count_original = ? , url_short = ? WHERE id = ?", (counter ,check_short_url['url_short'], check_short_url['id']))
-            con.commit()
-            con.close() 
-            return(jsonify(url=check_short_url['url_original'], sent_url_type='short'))
-
-        #if check_long_url not found
-        if not check_long_url: 
-            data =  con.execute("INSERT INTO urls(url_original) VALUES (?)",(url,))
-    
-        #get id of latest record 
-        lastrecord = con.execute('SELECT * FROM urls  WHERE url_original = ?', (url,)).fetchone()
-        id_url = lastrecord['id'] 
+        
+        # if url_original exists than increment the count_original, if not then we add it to the DB
+        found_short_url = Urls.query.filter_by(url_short=url).first()
+        print('found_short_url',found_short_url)
+        found_long_url = Urls.query.filter_by(url_original=url).first()
+        print('found_long_url',found_long_url)
+        if found_short_url: 
+            #if url_original exists than increment the count_original in the DB
+            db.session.query(Urls).filter_by(url_short= url).update({Urls.count_original: Urls.count_original+ 1})
+            db.session.commit()
+            print('original_url found then increment count')
+            return(jsonify(url=found_short_url.url_original, sent_url_type='short'))
+        
+        elif not found_long_url:
+            #create new model 
+            url_record = Urls(url, '', datetime.now(), 0) 
+            #save model
+            db.session.add(url_record)
+            db.session.commit()
+        
+        new_long_url = Urls.query.filter_by(url_original=url).first()       
+        id_url =  new_long_url.id
         hash_id = hashids.encode(id_url)
-        url_short = request.host_url + hash_id 
-        
-        if not check_long_url: 
-            data =  con.execute("UPDATE urls SET url_short = ? WHERE url_original =?",(url_short,url))
-            
-        con.commit()
-        con.close() 
-        
+        url_short = request.host_url + hash_id      
+        db.session.query(Urls).filter_by(url_original= url).update({Urls.url_short: url_short })
+        db.session.commit()       
         redirect(url_short)# url_redirect(id) function will be called 
-        return(jsonify(url=url_short, count= lastrecord['count_original'], sent_url_type='long'))
+        return(jsonify(url=url_short, count= new_long_url.count_original, sent_url_type='long'))
 
         
 
