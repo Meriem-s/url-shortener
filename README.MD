@@ -1,5 +1,5 @@
 
-# URL Shortner using Flask and SQLite
+# URL Shortner using Flask ,SQLAlchemy and SQLite
 
 ## Problem
 
@@ -20,12 +20,6 @@ For the standalone web service:
 only Flask, SQLite will be used for this installation. 
 ```shell
 pip install -r requirements.txt
-```
-
-### Initialize Database 
-In order to execute the schema.sql file aiming to create the urls table, run:
-```shell
-python init_db.py
 ```
 
 ### Run Server 
